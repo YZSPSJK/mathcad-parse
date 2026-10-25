@@ -1,0 +1,22 @@
+[project]
+name = "mathcad-workbench"
+version = "0.1.0"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "fastapi==0.119.1", "uvicorn==0.38.0", "sqlalchemy==2.0.44",
+  "pydantic-settings==2.11.0", "python-multipart==0.0.20", "lxml==6.0.2",
+  "pypdf==6.1.2", "pywin32==311; sys_platform == 'win32'",
+  "psutil==7.1.0",
+  "pywinauto==0.6.9; sys_platform == 'win32'",
+]
+
+[dependency-groups]
+dev = ["pytest==8.4.2", "httpx==0.28.1", "ruff==0.14.2"]
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["."]
+
+[tool.ruff]
+line-length = 110
+target-version = "py312"

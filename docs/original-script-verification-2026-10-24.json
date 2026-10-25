@@ -1,0 +1,59 @@
+{
+  "dispatch": "Dispatch",
+  "reopened": [
+    {
+      "file": "D:\\workspace\\mathcad\\data\\manual-tests\\445a1672-5d5b-4fe2-9bf3-53d2501adb42\\recalculated.mcdx",
+      "values": {
+        "A": {
+          "error_code": 0,
+          "value": 12.0,
+          "units": ""
+        },
+        "B": {
+          "error_code": 0,
+          "value": 2.0,
+          "units": ""
+        },
+        "C": {
+          "error_code": 0,
+          "value": 28.0,
+          "units": ""
+        },
+        "out": {
+          "error_code": 0,
+          "value": 30.0,
+          "units": ""
+        }
+      },
+      "matches_expected": true
+    },
+    {
+      "file": "D:\\workspace\\mathcad\\data\\manual-tests\\e64c8315-09e6-4afe-8ccc-65ebe9829e9d\\recalculated.mcdx",
+      "values": {
+        "A": {
+          "error_code": 0,
+          "value": 20.0,
+          "units": ""
+        },
+        "B": {
+          "error_code": 0,
+          "value": 2.0,
+          "units": ""
+        },
+        "C": {
+          "error_code": 0,
+          "value": 36.0,
+          "units": ""
+        },
+        "out": {
+          "error_code": 0,
+          "value": 38.0,
+          "units": ""
+        }
+      },
+      "matches_expected": true
+    }
+  ],
+  "version": "12.0.1.0",
+  "passed": true
+}

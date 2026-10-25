@@ -1,0 +1,12 @@
+.venv/
+.cache/
+.tools/
+__pycache__/
+.pytest_cache/
+*.pyc
+data/
+.runtime/
+.env
+node_modules/
+.next/
+*.tsbuildinfo

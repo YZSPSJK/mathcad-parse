@@ -1,0 +1,29 @@
+{
+  "document_id": "0f1fc415-713a-4352-a419-697c579db6f5",
+  "revision": 3,
+  "pdf": "D:\\workspace\\mathcad\\data\\documents\\0f1fc415-713a-4352-a419-697c579db6f5\\revisions\\3\\5e989cf7-8169-414e-8ebc-3c36e61ec57d.pdf",
+  "pages": 1,
+  "text": [
+    "输入\n≔A 12\n输入\n≔B 2\n输入\n≔C ++A 2 B 12\n输出\n=+B C 30"
+  ],
+  "cached_preview": {
+    "artifact": {
+      "id": "dcbf9ee8-fd25-44a4-a0f1-a065c25ac52b",
+      "revision": 3,
+      "kind": "pdf",
+      "sha256": "79190db36fec3b8657de5950a25cff33bdf9ef46ba59ad085e577a859d233e13",
+      "size": 505057,
+      "created_at": "2026-10-24T15:23:14.317890+00:00",
+      "url": "/api/artifacts/dcbf9ee8-fd25-44a4-a0f1-a065c25ac52b/content"
+    },
+    "cached": true
+  },
+  "original_unchanged": true,
+  "outputs": [
+    {
+      "alias": "out",
+      "value": "30.0",
+      "origin": "计算版本 r3"
+    }
+  ]
+}

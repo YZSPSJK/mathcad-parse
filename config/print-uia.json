@@ -1,0 +1,10 @@
+{
+  "verified": false,
+  "main_window": {"title_re": ".*Mathcad Prime.*", "control_type": "Window"},
+  "print_dialog": {"title_re": "^(Print|打印)$", "control_type": "Window"},
+  "printer_combo": {"control_type": "ComboBox", "found_index": 0},
+  "print_button": {"title_re": "^(Print|打印|打印\\(&P\\))$", "control_type": "Button"},
+  "save_dialog": {"title_re": ".*(Save Print Output As|将打印输出另存为|保存打印输出为).*", "control_type": "Window"},
+  "filename_edit": {"auto_id": "1001", "control_type": "Edit"},
+  "save_button": {"auto_id": "1", "control_type": "Button"}
+}
