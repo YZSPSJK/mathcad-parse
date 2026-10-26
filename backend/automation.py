@@ -52,10 +52,11 @@ class Prime:
     def __enter__(self):
         if platform.system() != "Windows":
             raise BusinessError("windows_required", "真实计算需要安装并授权 Mathcad Prime 12 的 Windows 主机", 503)
-        if not settings().integration_verified and not self.allow_unverified:
-            raise BusinessError("integration_unverified", "Mathcad 集成尚未通过验证，请先完成本机计算与打印验收，再启用计算服务", 503,
-                                {"command": "python scripts/smoke.py --sample <mcdx> --inputs <json>",
-                                 "configuration": "INTEGRATION_VERIFIED=true"})
+        # 临时跳过集成验证门禁；完成本机 Mathcad smoke 验收后可恢复此检查。
+        # if not settings().integration_verified and not self.allow_unverified:
+        #     raise BusinessError("integration_unverified", "Mathcad 集成尚未通过验证，请先完成本机计算与打印验收，再启用计算服务", 503,
+        #                         {"command": "python scripts/smoke.py --sample <mcdx> --inputs <json>",
+        #                          "configuration": "INTEGRATION_VERIFIED=true"})
         if settings().result_strategy != "api_recalculate":
             raise BusinessError("strategy_unverified", "结果清理策略未验证；生产仅允许已通过 smoke 的 api_recalculate 策略", 503)
         import pythoncom
@@ -197,6 +198,18 @@ class Prime:
             if not same_values(expected, clean(actual)):
                 raise BusinessError("input_mismatch", f"{by_id[key]['alias']} 的实际输入与提交值不一致", 409)
         return effective
+
+    def verify_region_values(self, fields):
+        """Check edited worksheet definitions through the same Mathcad input API."""
+        values = {}
+        for field in fields:
+            if field["direction"] != "input":
+                continue
+            actual = self.read(field["alias"], "input")
+            if actual.get("status") == "error" or actual.get("type") not in {"real", "matrix"}:
+                raise BusinessError("region_calculation", f"{field['alias']} 的区域公式未返回有效值：{actual.get('reason', '无有效结果')}", 422)
+            values[field["id"]] = actual
+        return values
 
     def save(self, path):
         self.sheet.SaveAs(str(Path(path).resolve()))

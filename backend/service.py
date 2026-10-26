@@ -1,12 +1,16 @@
 import json
+import io
+import zipfile
 from pathlib import Path
 
 from sqlalchemy import select
 
 from backend.config import settings
-from backend.db import Artifact, CalculationRun, Document, DraftInput, IOField, Job, Region, SourcePart, now, uid
+from backend.db import (Artifact, CalculationRun, Document, DraftInput, IOField, Job, LatexRegionDraft,
+                        LatexWorkspaceState, Region, SourcePart, now, uid)
 from backend.formulas import (FormulaError, definition_xml, expression_from_xml, expression_key,
                               format_expression, parse_expression, references)
+from backend.latex import mathml_expression, parse_latex, region_to_latex, validate_region_expression
 from backend.parser import finite, parse, sha
 
 GENERATOR = "mathcad-workbench/0.2.0-formulas"
@@ -51,9 +55,12 @@ def upload(session, filename: str, data: bytes):
     session.add(doc)
     session.flush()
     snapshot_parts(session, document_id, "upload", parsed.parts)
-    session.add_all([Region(document_id=document_id, **region) for region in parsed.regions])
+    session.add_all([Region(document_id=document_id, **{key: value for key, value in region.items()
+                                                         if key != "allowed_variables"})
+                     for region in parsed.regions])
     fields, drafts = [], []
     for field in parsed.fields:
+        field.pop("allowed_variables", None)
         field.pop("geometry")
         field.pop("kind")
         row = IOField(id=uid(), document_id=document_id, **field)
@@ -280,6 +287,154 @@ def view(session, document_id, form=False):
                                drafts.get(f.id, f.saved_value), f.saved_value)) else "文件中保存的值"}
                           for f in fields]
     return data
+
+
+def _latex_source_parse(session, doc):
+    snapshot = f"revision:{doc.latest_revision}" if doc.latest_revision else "upload"
+    rows = session.scalars(select(SourcePart).where(
+        SourcePart.document_id == doc.id, SourcePart.snapshot == snapshot,
+        SourcePart.path.in_(["mathcad/worksheet.xml", "mathcad/result.xml", "mathcad/integration.xml",
+                             "[Content_Types].xml", "_rels/.rels", "docProps/app.xml"]))).all()
+    parts = {row.path: row.content for row in rows}
+    required = {"mathcad/worksheet.xml", "[Content_Types].xml", "_rels/.rels"}
+    if not required <= parts.keys():
+        return parse(Path(doc.source_path).read_bytes(), matrix_order=settings().matrix_xml_order)
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        for name, content in parts.items():
+            archive.writestr(name, content)
+    return parse(buffer.getvalue(), matrix_order=settings().matrix_xml_order)
+
+
+def latex_workspace(session, document_id):
+    doc = get_document(session, document_id)
+    base = view(session, document_id, form=True)
+    parsed = _latex_source_parse(session, doc)
+    state = session.get(LatexWorkspaceState, doc.id)
+    version = state.version if state else 0
+    drafts = session.scalars(select(LatexRegionDraft).where(
+        LatexRegionDraft.document_id == doc.id)).all()
+    draft_by_region = {draft.region_id: draft for draft in drafts}
+    run = session.scalar(select(CalculationRun).where(CalculationRun.document_id == doc.id,
+                                                      CalculationRun.revision == doc.latest_revision))
+    effective_inputs = (run.engine or {}).get("effective_inputs", {}) if run else {}
+    fields_by_region = {}
+    for field in base["fields"]:
+        fields_by_region.setdefault(field["region_id"], []).append(field)
+    regions = []
+    for source in parsed.regions:
+        region_id = source["region_id"]
+        draft = draft_by_region.get(region_id)
+        try:
+            allowed_variables = source.get("allowed_variables", [])
+            converted = region_to_latex(source["expression_xml"], allowed_variables)
+            latex = draft.latex if draft else converted["latex"]
+            editable, reason = True, ""
+            display_name = converted["display_name"] or region_id
+        except FormulaError as exc:
+            latex = draft.latex if draft else ""
+            editable, reason = False, str(exc)
+            display_name = next((field["display_name"] for field in fields_by_region.get(region_id, [])), region_id)
+        ref = source["result_ref"]
+        value = parsed.result_values.get(ref) if ref is not None else None
+        linked_fields = fields_by_region.get(region_id, [])
+        if linked_fields:
+            output = next((field["value"] for field in linked_fields if field["direction"] == "output"), None)
+            input_value = next((effective_inputs[field["id"]] for field in linked_fields
+                                if field["direction"] == "input" and field["id"] in effective_inputs), None)
+            value = output or input_value or value or next(
+                (field["value"] for field in linked_fields if field["direction"] == "input"), None)
+        regions.append({"region_id": region_id, "kind": source["kind"], "geometry": source["geometry"],
+                        "result_ref": ref, "display_name": display_name, "latex": latex,
+                        "allowed_variables": source.get("allowed_variables", []),
+                        "editable": editable, "reason": reason, "value": value,
+                        "fields": [{"direction": field["direction"], "alias": field["alias"],
+                                    "display_name": field["display_name"], "value": field["value"]}
+                                   for field in linked_fields],
+                        "expression_xml": source["expression_xml"], "saved_draft": bool(draft)})
+    calculated_version = (run.configuration or {}).get("latex_version", 0) if run else 0
+    base.update({"regions": regions, "latex_version": version,
+                 "latex_dirty": version > calculated_version,
+                 "calculated_latex_version": calculated_version})
+    return base
+
+
+def save_latex_region(session, document_id, region_id, expected_version, latex):
+    if not isinstance(latex, str) or len(latex) > 1024:
+        raise BusinessError("invalid_latex", "LaTeX 表达式不能为空且不能超过 1024 个字符", 422)
+    begin_write(session)
+    doc = get_document(session, document_id)
+    if doc.active_job:
+        raise BusinessError("document_busy", "此文档有未完成任务，请等待任务结束", 409)
+    state = session.get(LatexWorkspaceState, doc.id)
+    version = state.version if state else 0
+    if version != expected_version:
+        raise BusinessError("version_conflict", "LaTeX 草稿已在其他页面更新，请刷新后重试", 409)
+    parsed = _latex_source_parse(session, doc)
+    source = next((region for region in parsed.regions if region["region_id"] == region_id), None)
+    if source is None:
+        raise BusinessError("not_found", "工作表区域不存在", 404)
+    try:
+        allowed_variables = source.get("allowed_variables", [])
+        region_to_latex(source["expression_xml"], allowed_variables)
+        tree = parse_latex(latex, allowed_variables)
+        expression_xml = validate_region_expression(mathml_expression(tree), allowed_variables)
+    except FormulaError as exc:
+        raise BusinessError("invalid_latex", str(exc), 422) from exc
+    draft = session.scalar(select(LatexRegionDraft).where(
+        LatexRegionDraft.document_id == doc.id, LatexRegionDraft.region_id == region_id))
+    changed = False
+    if draft is None:
+        draft = LatexRegionDraft(document_id=doc.id, region_id=region_id,
+                                 latex=latex, expression_xml=expression_xml)
+        session.add(draft)
+        changed = True
+    elif draft.latex != latex or draft.expression_xml != expression_xml:
+        draft.latex, draft.expression_xml, draft.updated_at = latex, expression_xml, now()
+        changed = True
+    if state is None:
+        state = LatexWorkspaceState(document_id=doc.id, version=0)
+        session.add(state)
+    if changed:
+        # Version each persisted change so an old editor cannot overwrite a newer formula.
+        state.version += 1
+        state.updated_at = now()
+    session.commit()
+    return {"latex_version": state.version, "region_id": region_id, "latex": draft.latex}
+
+
+def submit_latex_calculation(session, document_id, expected_version):
+    begin_write(session)
+    doc = get_document(session, document_id)
+    if doc.active_job:
+        raise BusinessError("document_busy", "此文档有未完成任务，请等待任务结束", 409)
+    state = session.get(LatexWorkspaceState, doc.id)
+    version = state.version if state else 0
+    if version != expected_version:
+        raise BusinessError("version_conflict", "LaTeX 草稿已在其他页面更新，请刷新后重试", 409)
+    drafts = session.scalars(select(LatexRegionDraft).where(
+        LatexRegionDraft.document_id == doc.id)).all()
+    parsed = _latex_source_parse(session, doc)
+    available = {region["region_id"] for region in parsed.regions}
+    edits = {}
+    for draft in drafts:
+        if draft.region_id not in available:
+            raise BusinessError("region_missing", f"区域 {draft.region_id} 已不在当前工作表中", 409)
+        try:
+            allowed = next(region.get("allowed_variables", []) for region in parsed.regions
+                           if region["region_id"] == draft.region_id)
+            edits[draft.region_id] = {"latex": draft.latex, "allowed_variables": allowed,
+                                      "expression_xml": validate_region_expression(draft.expression_xml, allowed)}
+        except FormulaError as exc:
+            raise BusinessError("invalid_latex", f"区域 {draft.region_id}：{exc}", 409) from exc
+    fields = session.scalars(select(IOField).where(IOField.document_id == doc.id)).all()
+    inputs = {draft.field_id: draft.value for draft in session.scalars(
+        select(DraftInput).where(DraftInput.document_id == doc.id)).all()}
+    job = new_calculation(session, doc, fields, inputs, "latex_calculate")
+    run = session.get(CalculationRun, job.run_id)
+    run.configuration = {**run.configuration, "latex_regions": edits, "latex_version": version}
+    session.commit()
+    return {"job_id": job.id, "revision": doc.revision_counter, "latex_version": version}
 
 
 def convert_formula(session, document_id, field_id, *, expression=None, xml_content=None):

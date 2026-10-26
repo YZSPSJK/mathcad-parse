@@ -58,6 +58,24 @@ class Region(Base):
     expression_xml: Mapped[str]
 
 
+class LatexWorkspaceState(Base):
+    __tablename__ = "latex_workspace_states"
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), primary_key=True)
+    version: Mapped[int] = mapped_column(default=0)
+    updated_at: Mapped[str] = mapped_column(default=now)
+
+
+class LatexRegionDraft(Base):
+    __tablename__ = "latex_region_drafts"
+    __table_args__ = (UniqueConstraint("document_id", "region_id"),)
+    id: Mapped[str] = mapped_column(primary_key=True, default=uid)
+    document_id: Mapped[str] = mapped_column(ForeignKey("documents.id"), index=True)
+    region_id: Mapped[str]
+    latex: Mapped[str]
+    expression_xml: Mapped[str]
+    updated_at: Mapped[str] = mapped_column(default=now)
+
+
 class IOField(Base):
     __tablename__ = "io_fields"
     id: Mapped[str] = mapped_column(primary_key=True, default=uid)
@@ -155,13 +173,17 @@ def migrate():
     with engine.begin() as connection:
         connection.exec_driver_sql("CREATE TABLE IF NOT EXISTS schema_version (version INTEGER PRIMARY KEY)")
         version = connection.exec_driver_sql("SELECT max(version) FROM schema_version").scalar() or 0
-        if version > 1:
+        if version > 2:
             raise RuntimeError("数据库版本高于程序版本，请先升级程序")
         if version < 1:
             Base.metadata.create_all(connection)
             connection.exec_driver_sql("INSERT INTO schema_version VALUES (1)")
+            version = 1
+        if version < 2:
+            Base.metadata.create_all(connection)
+            connection.exec_driver_sql("INSERT INTO schema_version VALUES (2)")
 
 
 if __name__ == "__main__":
     migrate()
-    print("SQLite schema v1 已就绪")
+    print("SQLite schema v2 已就绪")

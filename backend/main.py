@@ -118,6 +118,11 @@ def form(document_id: str, session=Depends(session_dep)):
     return service.view(session, document_id, form=True)
 
 
+@app.get("/api/documents/{document_id}/latex")
+def latex_workspace(document_id: str, session=Depends(session_dep)):
+    return service.latex_workspace(session, document_id)
+
+
 class InputRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
     expected_version: int = Field(ge=0)
@@ -134,10 +139,34 @@ class FormulaRequest(BaseModel):
     xml: str | None = Field(default=None, max_length=16000)
 
 
+class LatexRegionRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=0)
+    latex: str = Field(min_length=1, max_length=1024)
+
+
+class LatexCalculationRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    expected_version: int = Field(ge=0)
+
+
 @app.post("/api/documents/{document_id}/formulas/{field_id}/convert")
 def formula_convert(document_id: str, field_id: str, payload: FormulaRequest, session=Depends(session_dep)):
     return service.convert_formula(session, document_id, field_id, expression=payload.expression,
                                    xml_content=payload.xml)
+
+
+@app.put("/api/documents/{document_id}/latex/regions/{region_id}")
+def save_latex_region(document_id: str, region_id: str, payload: LatexRegionRequest,
+                      session=Depends(session_dep)):
+    return service.save_latex_region(session, document_id, region_id,
+                                     payload.expected_version, payload.latex)
+
+
+@app.post("/api/documents/{document_id}/latex/calculate", status_code=202)
+def calculate_latex(document_id: str, payload: LatexCalculationRequest,
+                    session=Depends(session_dep)):
+    return service.submit_latex_calculation(session, document_id, payload.expected_version)
 
 
 class ArtifactRequest(BaseModel):

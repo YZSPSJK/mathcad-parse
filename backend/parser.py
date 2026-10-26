@@ -95,6 +95,7 @@ class Parsed:
     parts: dict[str, bytes]
     regions: list[dict] = field(default_factory=list)
     fields: list[dict] = field(default_factory=list)
+    result_values: dict[str, dict] = field(default_factory=dict)
     app_info: dict = field(default_factory=dict)
     diagnostics: list[dict] = field(default_factory=list)
 
@@ -169,7 +170,9 @@ def parse(data: bytes, *, matrix_order: str | None = None) -> Parsed:
                     value = unsupported("复合结果/单位结构暂不支持，保留原始 XML", raw)
                 value["raw_xml"] = raw
             results[rid] = value
+        parsed.result_values = results
     regions = {}
+    previous_variable_names = []
     definitions = {}
     for node in worksheet.findall(f".//{{{WS}}}region"):
         rid = node.get("region-id", "")
@@ -177,8 +180,16 @@ def parse(data: bytes, *, matrix_order: str | None = None) -> Parsed:
         ref = math_node.get("resultRef") if math_node is not None else None
         expression = ET.tostring(math_node, encoding="unicode") if math_node is not None else ""
         definition = math_node.find(f"{{{ML}}}define") if math_node is not None else None
+        variable = ""
         if definition is not None:
             definitions[rid] = definition
+            identifier = definition.find(f"{{{ML}}}id")
+            variable = (identifier.text or "").strip() if identifier is not None else ""
+            allowed_variables = [name for name in previous_variable_names if name != variable]
+            if variable and NAME.fullmatch(variable) and variable not in previous_variable_names:
+                previous_variable_names.append(variable)
+        else:
+            allowed_variables = list(previous_variable_names)
         evaluation = math_node.find(f"{{{ML}}}eval") if math_node is not None else None
         identifier = definition.find(f"{{{ML}}}id") if definition is not None else (
             evaluation[0] if evaluation is not None and len(evaluation)
@@ -188,7 +199,7 @@ def parse(data: bytes, *, matrix_order: str | None = None) -> Parsed:
         if literal and literal["type"] == "unsupported" and any(
                 identifier.get("labels") != "UNIT" for identifier in definition[1].iter(f"{{{ML}}}id")):
             literal = {**literal, "reason": "输入为公式，文件未保存有效数值，需由 Mathcad 读取"}
-        region = {"region_id": rid, "result_ref": ref,
+        region = {"region_id": rid, "result_ref": ref, "allowed_variables": allowed_variables,
                   "kind": ET.QName(node[0]).localname if len(node) else "unknown",
                   "geometry": dict(node.attrib), "expression_xml": expression}
         parsed.regions.append(region)

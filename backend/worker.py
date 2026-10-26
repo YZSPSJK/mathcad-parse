@@ -14,9 +14,11 @@ from sqlalchemy import select
 from backend.automation import Prime, validate_pdf
 from backend.config import settings
 from backend.db import Artifact, CalculationRun, Document, IOField, Job, Session, migrate, now, uid
+from backend.formulas import FormulaError, expression_key
+from backend.latex import parse_latex, region_to_latex
 from backend.parser import RESULT, parse, sha, xml
 from backend.service import BusinessError, artifact_json, cache_key, error, same_values, snapshot_parts
-from backend.worksheet_inputs import check_saved_formula, patch_formulas
+from backend.worksheet_inputs import check_saved_formula, patch_formulas, patch_region_expressions
 
 log = logging.getLogger("mathcad.worker")
 
@@ -127,13 +129,27 @@ def cleanup_owned(work_dir):
         log.exception("清理专用 Mathcad 进程失败：%s", work_dir)
 
 
-def validate_saved(path, fields, expected_inputs=None, expected_outputs=None):
+def validate_saved(path, fields, expected_inputs=None, expected_outputs=None, expected_regions=None):
     parsed = parse(path.read_bytes(), matrix_order=settings().matrix_xml_order)
     expected = {(f["direction"], f["alias"], f["region_id"]) for f in fields}
     actual = {(f["direction"], f["alias"], f["region_id"]) for f in parsed.fields}
     if expected != actual:
         raise BusinessError("saved_alias_mismatch", "保存后的输入输出映射变化，拒绝发布文件", 409)
     by_alias = {(f["direction"], f["alias"]): f for f in parsed.fields}
+    by_region = {region["region_id"]: region for region in parsed.regions}
+    for region_id, expected_region in (expected_regions or {}).items():
+        actual_region = by_region.get(region_id)
+        if actual_region is None:
+            raise BusinessError("saved_region_missing", f"保存后的工作表缺少区域 {region_id}", 409)
+        try:
+            allowed = expected_region.get("allowed_variables", [])
+            actual = region_to_latex(actual_region["expression_xml"], allowed)
+            actual_tree = parse_latex(actual["latex"], allowed)
+            expected_tree = parse_latex(expected_region["latex"], allowed)
+            if expression_key(actual_tree) != expression_key(expected_tree):
+                raise FormulaError("保存后的表达式与 LaTeX 草稿不一致")
+        except FormulaError as exc:
+            raise BusinessError("saved_region_mismatch", f"区域 {region_id}：{exc}", 409) from exc
     for field in fields:
         expected_value = (expected_inputs or {}).get(field["id"]) if field["direction"] == "input" else (expected_outputs or {}).get(field["id"])
         saved_value = by_alias[(field["direction"], field["alias"])]["saved_value"]
@@ -218,9 +234,15 @@ def execute(job_id, *, prime_factory=Prime):
                       for f in fields]
             source, original_hash = Path(doc.source_path), doc.sha256
             inputs, outputs, kind = run.inputs, run.outputs, job.kind
+            latex_regions = run.configuration.get("latex_regions", {})
             saved_artifact = session.scalar(select(Artifact).where(Artifact.run_id == run.id, Artifact.kind == "mcdx"))
         if sha(source.read_bytes()) != original_hash:
             raise BusinessError("source_changed", "源文件校验失败，请从备份恢复", 409)
+        edited_regions = set(latex_regions)
+        calc_fields = [field for field in fields if not (
+            field["direction"] == "input" and field["region_id"] in edited_regions)]
+        calc_input_ids = {field["id"] for field in calc_fields}
+        calc_inputs = {key: value for key, value in inputs.items() if key in calc_input_ids}
         source_copy = work / "working.mcdx"
         if kind == "preview":
             if saved_artifact is None:
@@ -231,17 +253,24 @@ def execute(job_id, *, prime_factory=Prime):
             source_copy.write_bytes(saved_data)
         else:
             shutil.copyfile(source, source_copy)
-            patch_formulas(source_copy, fields, inputs)
+            if latex_regions:
+                patch_region_expressions(source_copy, latex_regions)
+            patch_formulas(source_copy, calc_fields, calc_inputs)
         with prime_factory(work) as prime:
             prime.open(source_copy)
             prime.verify_aliases(fields)
             if kind != "preview":
                 set_stage(job_id, "setting_inputs")
-                prime.set_inputs(fields, inputs)
+                prime.set_inputs(calc_fields, calc_inputs)
                 set_stage(job_id, "calculating")
                 prime.calculate()
                 set_stage(job_id, "reading_outputs")
-                effective_inputs = prime.verify_inputs(fields, inputs)
+                # Verify all mapped inputs after the edited XML is opened. Formula regions
+                # are checked for a Mathcad error without coercing their calculated value.
+                effective_inputs = prime.verify_inputs(calc_fields, calc_inputs) or {}
+                if latex_regions and hasattr(prime, "verify_region_values"):
+                    effective_inputs.update(prime.verify_region_values(
+                        [field for field in fields if field["region_id"] in edited_regions]))
                 outputs = prime.read_outputs(fields)
                 save_results(job_id, outputs, {"version": prime.version, "adapter": "Prime COM",
                                               "strategy": "api_recalculate", "effective_inputs": effective_inputs or {}})
@@ -250,12 +279,12 @@ def execute(job_id, *, prime_factory=Prime):
                 try:
                     prime.save(temporary)
                     set_stage(job_id, "validating")
-                    parsed = validate_saved(temporary, fields, inputs, outputs)
+                    parsed = validate_saved(temporary, fields, calc_inputs, outputs, latex_regions)
                     # 重开同一计算产物，核对生效输入/输出后才登记可下载文件。
                     prime.close_sheet()
                     prime.open(temporary)
                     prime.verify_aliases(fields)
-                    prime.verify_inputs(fields, inputs)
+                    prime.verify_inputs(calc_fields, calc_inputs)
                     reopened = prime.read_outputs(fields)
                     if not same_values(outputs, reopened):
                         raise BusinessError("reopen_changed", "保存并重开后结果发生变化，拒绝发布此版本", 409)
@@ -271,7 +300,7 @@ def execute(job_id, *, prime_factory=Prime):
                     if not same_values(outputs, prime.read_outputs(fields)):
                         raise BusinessError("preview_changed", "打印副本结果发生变化，请重新计算创建新版本", 409)
             else:
-                prime.verify_inputs(fields, inputs)
+                prime.verify_inputs(calc_fields, calc_inputs)
                 if not same_values(outputs, prime.read_outputs(fields)):
                     raise BusinessError("preview_changed", "打开文件后结果发生变化，请重新计算创建新版本", 409)
                 mcdx = artifact_json(saved_artifact)

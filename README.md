@@ -58,6 +58,7 @@ worker 使用 `Dispatch` 连接已有 Mathcad 实例或启动实例；已有进�
 5. 首次预览/导出若尚无成功版本，会提交真实计算任务并显示阶段；上传时的旧输出不会冒充该任务结果。最新版本已有产物时直接复用，不调用 Mathcad。
 6. 计算成功先保存结果，再生成 MCDX；保存失败保留计算输出并单独报告。重试需重新计算时创建新 revision。PDF 单独失败仍可下载已生成 MCDX，重试 PDF 使用原 revision。
 7. 新版本不会复用旧 PDF；打开版本 MCDX 若发生结果变化，预览失败并要求重新计算，不覆盖已有版本快照。
+8. 首页操作栏的“LaTeX 区域解析”进入独立 `/latex` 工作区，重新读取 `worksheet.xml`、`result.xml` 和 `integration.xml`，用 KaTeX 展示区域，用 MathLive 编辑并保存 LaTeX 草稿。点击“调用 Mathcad 计算”后，服务只在任务副本中把 LaTeX 转成 Mathcad MathML，调用 Prime，保存输出与新的 MCDX 版本；刷新页面可查看结果并下载最新文件。不支持安全往返转换的区域会保留原 XML 并显示为只读。
 
 完整源文件永久保留。所有 ZIP 部件按字节保存在上传快照表；计算后部件另存 `revision:<n>` 快照，未知图片、图表、文本等部件由 Prime 保存，不在本系统中重建。解析器按命名空间 URI 区分节点，不依赖 XML 前缀；alias、region-id、resultRef 分开存储，支持一 region 多 alias，冲突 alias 禁止编辑。
 

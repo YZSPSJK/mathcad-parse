@@ -53,6 +53,10 @@ class TestPrime:
     def verify_inputs(self, fields, inputs):
         self.inputs = inputs
 
+    def verify_region_values(self, fields):
+        return {field["id"]: {"type": "real", "value": "15", "units": "", "status": "calculated"}
+                for field in fields if field["direction"] == "input"}
+
     def read_outputs(self, fields):
         return {f["id"]: {"type": "real", "value": "20", "units": "", "status": "calculated"}
                 for f in fields if f["direction"] == "output"}
@@ -63,7 +67,10 @@ class TestPrime:
         with zipfile.ZipFile(self.path) as z:
             parts = {p: z.read(p) for p in z.namelist()}
         root = ET.fromstring(parts["mathcad/worksheet.xml"])
-        root.find(f".//{{{ML}}}define/{{{ML}}}real").text = next(iter(self.inputs.values()))["value"]
+        if self.inputs:
+            literal = root.find(f".//{{{ML}}}define/{{{ML}}}real")
+            if literal is not None:
+                literal.text = next(iter(self.inputs.values()))["value"]
         parts["mathcad/worksheet.xml"] = ET.tostring(root)
         path.write_bytes(archive(parts))
 

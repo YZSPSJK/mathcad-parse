@@ -4,6 +4,8 @@ export type Job = { id: string; status: string; stage: string; kind: string; err
 export type Field = { id: string; direction: string; alias: string; display_name: string; region_id: string; result_ref: string | null; value_type: string; units: string; supported: boolean; reason: string | null; expression_xml: string; value: Value; origin: string; allowed_variables: string[]; formula_xml: string | null; effective_value: Value | null };
 export type Doc = { id: string; name: string; uploaded_at: string; size: number; sha256: string; parse_status: string; draft_version: number; latest_revision: number | null; active_job: string | null; dirty: boolean; diagnostics: { message: string; part?: string; region_id?: string }[]; fields: Field[]; inputs: Record<string, Value>; artifacts: Artifact[]; jobs: Job[]; run: { revision: number; status: string; artifact_status: string; error?: { message: string } } | null };
 export type ListedDoc = Pick<Doc, "id" | "name" | "uploaded_at" | "size" | "parse_status" | "latest_revision"> & { latest_job: Job | null };
+export type LatexRegion = { region_id: string; kind: string; geometry: Record<string, string>; result_ref: string | null; display_name: string; latex: string; editable: boolean; reason: string; value: Value | null; fields: { direction: string; alias: string; display_name: string; value: Value }[]; expression_xml: string; saved_draft: boolean };
+export type LatexWorkspace = Doc & { regions: LatexRegion[]; latex_version: number; latex_dirty: boolean; calculated_latex_version: number };
 
 let csrf: Promise<string> | undefined;
 async function token(): Promise<string> {
